@@ -1,0 +1,150 @@
+SFCLoad: A simple SNES ROM loader for SD2SNES/FXPak Pro flash cartridges
+------------------------------------------------------------------------
+
+This tool is used to instantly upload and start ROMs on an SNES/Super Famicom
+console, using any USB-enabled SD2SNES flash carts.
+
+
+Why this was made
+=================
+
+I made this program as a quick and dirty solution to instantly upload ROMs to
+my FXPak Pro flashcart via the command line, without the use of graphical tools
+or WebSocket servers, which is a bit more than I need for my own personal use-
+case. I was also curious as to see how the usb2snes protocol worked under the
+hood (using a mix of Wireshark/USBPcap sniffing and inspecting the firmware code
+for the sd2snes USB interface), and thought this would be a fun little project
+to try out.
+
+Do note that this program is very basic and minimal by design. If you need 
+something a bit more powerful, such as reading/writing to memory or using with 
+emulators, I can highly recommend you check out QUsb2snes by Skarsnik, which
+can be found here: https://skarsnik.github.io/QUsb2snes/
+
+I would also like to give some thanks and shout-outs to the sd2snes project,
+as well as the original usb2snes firmware project:
+https://sd2snes.de
+https://usb2snes.com/
+
+
+Requirements
+============
+
+Your flashcart (either an SD2SNES or FXPak Pro) must be running a firmware that
+supports USB communication. The sd2snes firmware version 1.11.0 and newer all
+supports USB (thanks to RedGuyy's original work on ubs2snes). It is highly  
+recommended to use the latest version of the firmware: http://sd2snes.de/
+
+
+Basic usage
+===========
+
+First, make sure your flash cart is connected to your computer with a USB cable,
+and that the game console is powered on. The flash cart should show up on your
+computer as a serial device. Example would be "/dev/ttyACM0" on Linux, or "COM3"
+on Windows. Please note that the serial device's name is different between
+systems. Thankfully, if you do not know the name of the device, SFCLoad is able
+to automatically scan and detect the device for you.
+
+The most simple way to run SFCLoad is to give it a ROM file, like so:
+
+    $ sfcload SuperAwesomeGame.sfc
+
+Here, the program will automatically scan for a compatible flash cart, and once
+a device is found, it will upload the ROM to the device. Once the upload is 
+finished, it will ask if you would like to boot up the ROM. If you choose "Yes"
+(Y), the program on the console will immediately start.
+
+A folder named "SFCLoad ROMs" is created in your flash cart's storage. This is
+where all ROMs uploaded using SFCLoad will be stored by default.
+
+SFCLoad uses a special naming scheme when uploading ROMs to the flash cart. It
+usually looks something like this:
+
+    rom_SUPER-AWESOME-GAME_cbf43926.sfc
+
+The file name is in three parts (excluding the extension): a `rom` prefix,
+followed by the program title (extracted from the header of the ROM), followed
+by a CRC32 checksum of the ROM. This naming schemes ensures that no duplicates
+will be stored on the flash card (saving space), while still uploading new or
+modified versions of the ROM if the checksum changes. This is especially useful
+for homebrew developers, so they can have different ROM revisions stored without
+any duplicates of identical ROMs.
+
+Of course, you can also keep the original file name by passing the `-N` option.
+Although be aware that it might overwrite existing files if they share the same
+name.
+
+For more information on the other available options, please refer to the usage
+text inside the program by passing the `-h` option.
+
+
+Troubleshooting and known issues
+================================
+
+On Linux and BSD, you may have to run the program with elevated privileges, in
+order to access serial devices. This can be done by using `sudo` on Linux or
+`doas` on BSD. On Windows and macOS, it *shouldn't* be necessary to run with 
+elevated privileges, but your mileage may vary.
+
+When uploading a ROM to the flash cart, it is strongly recommended *not* to
+abort the process (i.e.: sending a SIGTERM signal to the program, or killing the
+process), as this will put the flash cart's USB interface in a confused 
+state, where it's unable to process any further communications. This can also
+happen if the program gets re-run too quickly while the device is busy, but it's
+rare, at least from my own observations.
+
+If the flash cart doesn't seem to be accepting any further commands, the most 
+common fix is to just power off the console for a second, and then power it back
+on again, which should put the flash cart's USB interface in a clean state.
+
+
+Building from source
+====================
+
+This program requires libserialport to build, which is available in most package
+managers, or can be downloaded here: https://sigrok.org/wiki/Libserialport
+
+This program uses GNU Autotools to build.
+
+First things first, if you've downloaded this straight from the git repository,
+and not from a tarball, then please run `./autogen.sh` first.
+
+    $ ./autogen.sh
+
+To build, run the following in your terminal:
+
+    $ mkdir build && cd build
+    $ ../configure
+    $ make
+
+Note: If you've downloaded the source straight from the git repository, you may
+have to run `./autogen.sh` *before* you run the other commands above!
+
+Afterwards, to install, run `make install` (might need elevated privileges).
+
+
+Building on Windows
+===================
+
+If you're on Windows, you will need to use mingw-w64, preferably with MSYS2:
+https://www.mingw-w64.org/
+
+Please refer to MSYS2's documentation on how to install the required tools, such
+as autotools and libserialport. After that's done, you should be able to build 
+the program using the same commands above.
+
+WSL (Windows Subsystem for Linux) works as well, however, you will need to use
+something like usbipd-win to expose the USB device to the guest. Please refer 
+to this guide: https://learn.microsoft.com/en-us/windows/wsl/connect-usb
+
+
+Third-party libraries
+=====================
+
+This project uses libserialport by sigrok.org for serial communications, which
+is licensed under the GNU Lesser General Public License version 3 or later. For
+details, please see COPYING.libserialport
+
+Website: https://sigrok.org/wiki/Libserialport
+Source:  https://github.com/sigrokproject/libserialport

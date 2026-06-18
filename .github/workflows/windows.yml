@@ -1,0 +1,80 @@
+name: Windows
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-*'
+
+permissions:
+  contents: write
+
+env:
+  LIBSERIALPORT_VERSION: 0.1.2
+
+jobs:
+  build:
+    name: Windows ${{ matrix.label }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x86_64
+            host: x86_64-w64-mingw32
+          - label: x86_32
+            host: i686-w64-mingw32
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 autoconf automake pkg-config make \
+            zip bzip2 ca-certificates
+
+      - name: Build libserialport
+        run: |
+          curl -fLO "https://sigrok.org/download/source/libserialport/libserialport-${LIBSERIALPORT_VERSION}.tar.gz"
+          tar xf "libserialport-${LIBSERIALPORT_VERSION}.tar.gz"
+          cd "libserialport-${LIBSERIALPORT_VERSION}"
+          ./configure --host=${{ matrix.host }} --prefix="$GITHUB_WORKSPACE/sp" \
+            --enable-static --disable-shared
+          make -j"$(nproc)"
+          make install
+
+      - name: Build
+        run: |
+          export PKG_CONFIG_LIBDIR="$GITHUB_WORKSPACE/sp/lib/pkgconfig"
+          autoreconf -fi
+          mkdir build && cd build
+          ../configure --host=${{ matrix.host }} \
+            CFLAGS="-O2" \
+            LDFLAGS="-static" \
+            LIBSERIALPORT_CFLAGS="$(pkg-config --cflags libserialport)" \
+            LIBSERIALPORT_LIBS="$(pkg-config --static --libs libserialport) -lsetupapi -lcfgmgr32"
+          make -j"$(nproc)"
+          ${{ matrix.host }}-strip sfcload.exe
+
+      - name: Package
+        run: |
+          d="sfcload-${GITHUB_REF_NAME}-windows-${{ matrix.label }}"
+          mkdir "$d"
+          cp build/sfcload.exe "$d"/
+          for f in README AUTHORS COPYING; do
+            [ -e "$f" ] && cp "$f" "$d"/
+          done
+          cp "libserialport-${LIBSERIALPORT_VERSION}/COPYING" "$d/COPYING.libserialport"
+          mkdir -p dist
+          tar -czf "dist/$d.tar.gz"  "$d"
+          tar -cjf "dist/$d.tar.bz2" "$d"
+          zip -qr  "dist/$d.zip"     "$d"
+          cd dist && for f in *.tar.* *.zip; do
+            sha256sum "$f" > "$f.sha256"
+          done
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*
+          fail_on_unmatched_files: true

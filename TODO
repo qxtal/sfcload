@@ -1,0 +1,43 @@
+My TODO list for the next versions:
+
+  - Better safeguards against file upload interruptions.
+    
+    Currently, if the program is interrupted while uploading, the device is
+    still expecting the specified amount of data to come in. There's no way to
+    tell the program to abort the upload process, so any further commands will
+    get eaten up as garbage data.
+
+    A possible solution: A lock-file that contains information on the most
+    recent upload, as well as its file length. During normal procedure, the
+    lock file will be removed, but if the program is interrupted, and it sees
+    an existing lock-file on startup, it will then use the information to clear
+    out the device's buffer by padding it out until it's satisfied, then
+    continue with normal procedures.
+
+    Another solution, which could complement the above idea, would be an IPC
+    signal handler. If the user aborts by sending SIGINT (Ctrl-C on UNIX), the 
+    program should gracefully handle the situation somehow.
+
+  - ROM verification after upload.
+    
+    When a ROM is uploaded, it should try and grab the data back from the
+    device again, and store it in memory, so a data comparison can be done.
+    If there's a mismatch, then report an error.
+
+    The device firmware has no way of self-verifying its own data, so this
+    could have some issues. For example, how would we know that the device 
+    didn't drop USB packets when sending *back* the data to the PC? The data
+    internally might be good, but we won't know for sure. It's a bit messy,
+    since the firmware is very simplistic. (maybe a feature idea for a future
+    sd2snes firmware patch?)
+
+  - Implement "low-performance mode"
+
+    If the host computer is too slow, and the user experiences a higher 
+    frequency of dropped USB packets, the program should provide the user with
+    a "low-performance mode", where the upload speed is slowed down and with a
+    slight delay between transmissions, in order to make sure the host doesn't
+    send data too fast for its own good. So far, this behavior has only been 
+    observed on a Raspberry Pi 3, but most modern computers won't have this 
+    issue at all, but it will still be a nice thing to have for those with
+    slower PCs.

@@ -1,0 +1,87 @@
+name: macOS
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-*'
+
+permissions:
+  contents: write
+
+env:
+  LIBSERIALPORT_VERSION: 0.1.2
+  MACOS_TARGET: "11.0"
+
+jobs:
+  build:
+    name: macOS ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x86_64
+            runner: macos-15-intel
+            triple: x86_64-apple-darwin
+          - label: aarch64
+            runner: macos-14
+            triple: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install toolchain
+        run: brew install autoconf automake pkg-config
+
+      - name: Build libserialport
+        run: |
+          curl -fLO "https://sigrok.org/download/source/libserialport/libserialport-${LIBSERIALPORT_VERSION}.tar.gz"
+          tar xf "libserialport-${LIBSERIALPORT_VERSION}.tar.gz"
+          cd "libserialport-${LIBSERIALPORT_VERSION}"
+          ./configure --build=${{ matrix.triple }} --host=${{ matrix.triple }} \
+            --prefix="$GITHUB_WORKSPACE/sp" --enable-static --disable-shared \
+            CFLAGS="-O2 -mmacosx-version-min=${MACOS_TARGET}" \
+            LDFLAGS="-mmacosx-version-min=${MACOS_TARGET}"
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+
+      - name: Build
+        run: |
+          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/sp/lib/pkgconfig"
+          autoreconf -fi
+          mkdir build && cd build
+          ../configure \
+            CFLAGS="-O2 -mmacosx-version-min=${MACOS_TARGET}" \
+            LDFLAGS="-mmacosx-version-min=${MACOS_TARGET}" \
+            LIBSERIALPORT_CFLAGS="$(pkg-config --cflags libserialport)" \
+            LIBSERIALPORT_LIBS="$(pkg-config --static --libs libserialport) -framework IOKit -framework CoreFoundation"
+          make -j"$(sysctl -n hw.ncpu)"
+          strip sfcload
+
+      - name: Verify macOS target
+        run: |
+          echo "Minimum macOS version available:"
+          otool -l build/sfcload | grep -A3 -E 'LC_VERSION_MIN_MACOSX|LC_BUILD_VERSION' || true
+
+      - name: Package
+        run: |
+          d="sfcload-${GITHUB_REF_NAME}-macos-${{ matrix.label }}"
+          mkdir "$d"
+          cp build/sfcload "$d"/
+          for f in README AUTHORS COPYING COPYING; do
+            [ -e "$f" ] && cp "$f" "$d"/
+          done
+          cp "libserialport-${LIBSERIALPORT_VERSION}/COPYING" "$d/COPYING.libserialport"
+          mkdir -p dist
+          tar -czf "dist/$d.tar.gz"  "$d"
+          tar -cjf "dist/$d.tar.bz2" "$d"
+          zip -qr  "dist/$d.zip"     "$d"
+          cd dist && for f in *.tar.* *.zip; do
+            shasum -a 256 "$f" > "$f.sha256"
+          done
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*
+          fail_on_unmatched_files: true

@@ -1,0 +1,161 @@
+name: Linux
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-*'
+
+permissions:
+  contents: write
+
+env:
+  LIBSERIALPORT_VERSION: 0.1.2
+
+jobs:
+  source:
+    name: Source tarball
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake pkg-config make \
+            libserialport-dev libudev-dev zip bzip2
+
+      - name: Configuration
+        run: |
+          autoreconf -fi
+          mkdir build && cd build
+          ../configure
+
+      - name: Create source archives + checksums
+        run: |
+          cd build
+          make dist-gzip
+          make dist-bzip2
+          make dist-zip
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          mv sfcload-*.tar.gz sfcload-*.tar.bz2 sfcload-*.zip \
+            "$GITHUB_WORKSPACE/dist/"
+          cd "$GITHUB_WORKSPACE/dist"
+          for f in *.tar.* *.zip; do
+            sha256sum "$f" > "$f.sha256"
+          done
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*
+          fail_on_unmatched_files: true
+
+  # Binaries: x86_64, arm64
+  binary:
+    name: Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake pkg-config make \
+            libserialport-dev libudev-dev zip bzip2
+
+      - name: Build
+        run: |
+          autoreconf -fi
+          mkdir build && cd build
+          ../configure \
+            CFLAGS="-O2" \
+            LDFLAGS="-no-pie" \
+            LIBSERIALPORT_CFLAGS="$(pkg-config --cflags libserialport)" \
+            LIBSERIALPORT_LIBS="$(pkg-config --variable=libdir libserialport)/libserialport.a -ludev"
+          make -j"$(nproc)"
+          strip sfcload
+
+      - name: Package
+        run: |
+          d="sfcload-${GITHUB_REF_NAME}-linux-${{ matrix.arch }}"
+          mkdir "$d"
+          cp build/sfcload "$d"/
+          for f in README AUTHORS COPYING; do
+            [ -e "$f" ] && cp "$f" "$d"/
+          done
+          curl -fL "https://raw.githubusercontent.com/sigrokproject/libserialport/libserialport-${LIBSERIALPORT_VERSION}/COPYING" \
+            -o "$d/COPYING.libserialport"
+          mkdir -p dist
+          tar -czf "dist/$d.tar.gz"  "$d"
+          tar -cjf "dist/$d.tar.bz2" "$d"
+          zip -qr  "dist/$d.zip"     "$d"
+          cd dist && for f in *.tar.* *.zip; do
+            sha256sum "$f" > "$f.sha256"
+          done
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*
+          fail_on_unmatched_files: true
+
+  # Binaries: i386
+  binary-32:
+    name: Linux x86_32
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc autoconf automake pkg-config make \
+            libserialport-dev libudev-dev zip bzip2 ca-certificates
+
+      - name: Build inside 32-bit container
+        run: |
+          docker run --rm -v "$PWD":/src -w /src i386/debian:bookworm bash -c '
+            set -e
+            apt-get update
+            apt-get install -y gcc autoconf automake pkg-config make \
+              libserialport-dev libudev-dev ca-certificates
+            autoreconf -fi
+            mkdir -p build && cd build
+            ../configure \
+              CFLAGS="-O2" LDFLAGS="-no-pie" \
+              LIBSERIALPORT_CFLAGS="$(pkg-config --cflags libserialport)" \
+              LIBSERIALPORT_LIBS="$(pkg-config --variable=libdir libserialport)/libserialport.a -ludev"
+            make -j"$(nproc)"
+            strip sfcload
+          '
+
+      - name: Package
+        run: |
+          d="sfcload-${GITHUB_REF_NAME}-linux-x86_32"
+          mkdir "$d"
+          cp build/sfcload "$d"/
+          for f in README AUTHORS COPYING COPYING.libserialport; do
+            [ -e "$f" ] && cp "$f" "$d"/
+          done
+          mkdir -p dist
+          tar -czf "dist/$d.tar.gz"  "$d"
+          tar -cjf "dist/$d.tar.bz2" "$d"
+          zip -qr  "dist/$d.zip"     "$d"
+          cd dist && for f in *.tar.* *.zip; do
+            sha256sum "$f" > "$f.sha256"
+          done
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*
+          fail_on_unmatched_files: true
