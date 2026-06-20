@@ -30,8 +30,12 @@
 #include <getopt.h>
 #include <libgen.h>	/* basename() */
 #include <unistd.h> /* usleep() */
+#include <stdatomic.h>
 
 #include <libserialport.h>
+
+#define DMON_IMPL
+#include "deps/dmon/dmon.h"
 
 #include "common.h"
 #include "crc32.h"
@@ -44,10 +48,16 @@
 /* globals */
 bool g_verbose 		= false;
 bool g_debug 		= false;
-bool g_is_uploading	= false; 
+bool g_serial_init	= false;
+bool g_is_uploading	= false;
+//bool g_is_watching	= false;
+atomic_bool g_restart = false;
 
 static uint8_t *rom_buffer 	= NULL;
-static char *scan_port 		= NULL;
+static char *file_path		= NULL;
+static char *file_dir		= NULL;
+static char *file_name		= NULL;
+static char *scan_port		= NULL;
 static struct sp_port *port = NULL;
 
 /**
@@ -63,6 +73,21 @@ static void cleanup()
 	if (scan_port) {
 		free(scan_port);
 		scan_port = NULL;
+	}
+
+	if (file_path) {
+		free(file_path);
+		file_path = NULL;
+	}
+
+	if (file_dir) {
+		free(file_dir);
+		file_dir = NULL;
+	}
+
+	if (file_name) {
+		free(file_name);
+		file_name = NULL;
 	}
 
 	if (port) {
@@ -100,7 +125,7 @@ static void print_usage(char *program)
 
 	/* please keep each line string below 80 characters */
 	fprintf(stderr,
-		"Usage: %s [-vhbVDFN] [-p port] [-d dir] [-n name] romfile\n"
+		"Usage: %s [-vhmbVDFN] [-p port] [-d dir] [-n name] romfile\n"
 		"\n"
 		"Startup options:\n"
 		"  -v        Show version and exit.\n"
@@ -117,6 +142,9 @@ static void print_usage(char *program)
 		"  -n name   Set an optional custom upload file name in the flash cart.\n"
 		"              By default, all ROMs are uploaded with the naming convention of\n"
 		"              a timestamp, followed by the ROM title, followed by the checksum.\n"
+		"  -m        Monitor file changes.\n"
+		"              When enabled, the program will reupload the ROM file whenever any\n"
+		"              changes to the file are detected. Use Ctrl+C to quit the program.\n"
 		"  -b        Automatically boot the ROM after upload.\n"
 		"\n"
 		"Advanced options:\n"
@@ -131,6 +159,36 @@ static void print_usage(char *program)
 		"  romfile   The ROM file to be uploaded.\n",
 		name);
 		exit(OK);
+}
+
+/**
+ * @brief Callback function for file system monitoring.
+ * 
+ * This is used to check if the ROM file has been changed. If the user has
+ * enabled file monitoring, the program will automatically reload the file
+ * to the device (that part is handled further down in the main function).
+ * 
+ * This callback function is for the 'dmon' library by @septag, which requires
+ * specific parameters. We don't directly use most of those parameters (dmon
+ * does internally), so some of them are cast to void to make sure the compiler
+ * doesn't complaint to us.
+ * 
+ * @note No documentation for parameters, since they're only used by dmon
+ * internally. We never call this directly, but instead it is passed onto dmon's
+ * dmon_watch() function.
+ * 
+ * For details, please see the documentation for that library.
+ */
+void file_mon_callback(dmon_watch_id w_id, dmon_action action, const char *root,
+						const char *f_path, const char *o_path, void *user)
+{
+	/* ignore following parameters (required by dmon callbacks, but not used) */
+	(void)w_id; (void)root; (void)o_path; (void)user;
+
+	if (action == DMON_ACTION_MODIFY && strcmp(f_path, file_name) == 0) {
+		printf("File change for '%s ' detected.\n", file_name);
+		atomic_store(&g_restart, true);
+	}
 }
 
 /**
@@ -167,6 +225,7 @@ int main(int argc, char **argv)
 	bool 	 opt_boot = false;
 	bool	 opt_keepname = false;
 	bool	 opt_custom_name = false;
+	bool	 opt_file_monitor = false;
 	bool	 opt_force = false;
 
 	/* ROM metadata */
@@ -189,7 +248,7 @@ int main(int argc, char **argv)
 	 * decoupled from the switch/case, just to clean things up here and reduce.
 	 * nesting. For now, it just works, so that'll be for a future version.
 	 */
-	while ((opt = getopt(argc, argv, "DVFhvbd:n:p:N")) != -1) {
+	while ((opt = getopt(argc, argv, "DVFhvbmd:n:p:N")) != -1) {
 		switch (opt) {
 		case 'D':
 			g_debug = true;
@@ -210,6 +269,9 @@ int main(int argc, char **argv)
 			exit(OK);
 		case 'b':
 			opt_boot = true;
+			break;
+		case 'm':
+			opt_file_monitor = true;
 			break;
 		case 'p':
 			opt_port = optarg;
@@ -286,10 +348,20 @@ int main(int argc, char **argv)
 		fprintf(stderr, "See `%s -h` for usage.\n", basename(argv[0]));
 		exit(ERR);
 	}
-	opt_file = argv[optind];
+	opt_file  = argv[optind];
+	file_path = strdup(opt_file);
+
+	char *fd_tmp = strdup(opt_file);
+	file_dir = strdup(dirname(fd_tmp));
+	free(fd_tmp);
+
+	char *fn_tmp = strdup(opt_file);
+	file_name = strdup(basename(fn_tmp));
+	free(fn_tmp);
 
 	print_program_name();
 
+_start:
 	/* load the ROM into memory */
 	if (load_file_to_work_buffer(opt_file, &rom_length, &rom_buffer) == OK) {
 		printf("Loaded file: %s (%d bytes read)\n", opt_file, rom_length);
@@ -348,12 +420,11 @@ int main(int argc, char **argv)
 
 	/* set file name for the upload */
 	if (opt_keepname) {
-		char *base = basename(opt_file);
-		if (strlen(base) >= sizeof(rom_upload_name)) {
+		if (strlen(file_name) >= sizeof(rom_upload_name)) {
 			fprintf(stderr, "Error: File name cannot exceed 127 characters.\n");
 			exit(ERR);
 		}
-		strcpy(rom_upload_name, base);
+		strcpy(rom_upload_name, file_name);
 	} else if (!opt_custom_name) {
 		snprintf(rom_upload_name, sizeof(rom_upload_name), "rom_%s_%08x.%s",
 			rom_title, rom_crc32, "sfc");
@@ -373,28 +444,35 @@ int main(int argc, char **argv)
 		opt_port = scan_port;
 	}
 
-	if (sp_get_port_by_name(opt_port, &port) != SP_OK) {
-		fprintf(stderr, "Error: Could not set serial port.\n");
-		exit(ERR);
+	if (!g_serial_init) {
+		if (sp_get_port_by_name(opt_port, &port) != SP_OK) {
+			fprintf(stderr, "Error: Could not set serial port.\n");
+			exit(ERR);
+		}
+
+		/* open serial port, >>keep it open<< until program finishes */
+		if (sp_open(port, SP_MODE_READ_WRITE) != SP_OK ||
+			sp_set_baudrate(port, SERIAL_BAUD_RATE) != SP_OK ||
+			sp_set_bits(port, SERIAL_BITS) != SP_OK ||
+			sp_set_parity(port, SERIAL_PARITY) != SP_OK ||
+			sp_set_stopbits(port, SERIAL_STOP_BITS) != SP_OK ||
+			sp_set_flowcontrol(port, SERIAL_FLOW_CONTROL) != SP_OK ||
+			sp_set_dtr(port, SP_DTR_ON) != SP_OK ||
+			sp_set_rts(port, SP_RTS_ON) != SP_OK) {
+			fprintf(stderr, "Error: Could not initialize serial port.\n");
+			exit(ERR);
+		}
+
+		/* give the device some time to settle, then flush the buffers */
+		usleep(250000);
+		sp_flush(port, SP_BUF_BOTH);
+
+		/**
+		 * Makes sure the port initialization only happens once, in
+		 * case the routine restarts if file monitoring is enabled.
+		 */
+		g_serial_init = true;
 	}
-
-	/* open serial port, >>keep it open<< until program finishes */
-
-	if (sp_open(port, SP_MODE_READ_WRITE) != SP_OK ||
-		sp_set_baudrate(port, SERIAL_BAUD_RATE) != SP_OK ||
-		sp_set_bits(port, SERIAL_BITS) != SP_OK ||
-		sp_set_parity(port, SERIAL_PARITY) != SP_OK ||
-		sp_set_stopbits(port, SERIAL_STOP_BITS) != SP_OK ||
-		sp_set_flowcontrol(port, SERIAL_FLOW_CONTROL) != SP_OK ||
-		sp_set_dtr(port, SP_DTR_ON) != SP_OK ||
-		sp_set_rts(port, SP_RTS_ON) != SP_OK) {
-		fprintf(stderr, "Error: Could not initialize serial port.\n");
-		exit(ERR);
-	}
-
-	/* give the device some time to settle, then flush the buffers */
-	usleep(250000);
-	sp_flush(port, SP_BUF_BOTH);
 
 	/**
 	 * TODO: Currently, the check below doesn't account for a mid-transfer
@@ -483,6 +561,29 @@ _retry:
 		sd2_boot_rom(port, rom_upload_full_path);
 	} else {
 		printf("ROM boot skipped.\n");
+	}
+
+	if (opt_file_monitor) {
+		dmon_init();
+		dmon_watch_id w_id = dmon_watch(file_dir, file_mon_callback, 0, NULL);
+		
+		printf("\nMonitoring for file changes...\n");
+		printf("To quit the program, press Ctrl + C.\n");
+
+		while(!atomic_load(&g_restart)) {
+			usleep(1000000);
+		}
+
+		if (atomic_load(&g_restart)) {
+			dmon_unwatch(w_id);
+			dmon_deinit();
+			
+			free(rom_buffer);
+			rom_buffer = NULL;
+			
+			atomic_store(&g_restart, false);
+			goto _start;
+		}
 	}
 
 	return OK;
