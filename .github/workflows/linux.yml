@@ -5,6 +5,7 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,6 +19,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
 
       - name: Install dependencies
         run: |
@@ -65,6 +68,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
 
       - name: Install dependencies
         run: |
@@ -94,6 +99,7 @@ jobs:
           done
           curl -fL "https://raw.githubusercontent.com/sigrokproject/libserialport/libserialport-${LIBSERIALPORT_VERSION}/COPYING" \
             -o "$d/COPYING.libserialport"
+          cp src/deps/dmon/LICENSE "$d/COPYING.dmon"
           mkdir -p dist
           tar -czf "dist/$d.tar.gz"  "$d"
           tar -cjf "dist/$d.tar.bz2" "$d"
@@ -114,6 +120,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
 
       - name: Install dependencies
         run: |
@@ -146,6 +154,7 @@ jobs:
           for f in README AUTHORS COPYING COPYING.libserialport; do
             [ -e "$f" ] && cp "$f" "$d"/
           done
+          cp src/deps/dmon/LICENSE "$d/COPYING.dmon"
           mkdir -p dist
           tar -czf "dist/$d.tar.gz"  "$d"
           tar -cjf "dist/$d.tar.bz2" "$d"

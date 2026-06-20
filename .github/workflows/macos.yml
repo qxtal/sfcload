@@ -5,6 +5,7 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -29,6 +30,8 @@ jobs:
             triple: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
 
       - name: Install toolchain
         run: brew install autoconf automake pkg-config
@@ -72,6 +75,7 @@ jobs:
             [ -e "$f" ] && cp "$f" "$d"/
           done
           cp "libserialport-${LIBSERIALPORT_VERSION}/COPYING" "$d/COPYING.libserialport"
+          cp src/deps/dmon/LICENSE "$d/COPYING.dmon"
           mkdir -p dist
           tar -czf "dist/$d.tar.gz"  "$d"
           tar -cjf "dist/$d.tar.bz2" "$d"
