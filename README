@@ -148,3 +148,9 @@ details, please see COPYING.libserialport
 
 Website: https://sigrok.org/wiki/Libserialport
 Source:  https://github.com/sigrokproject/libserialport
+
+This project uses dmon by Sepehr Taghdisian (@septag) for file system
+monitoring, which is licensed under the BSD 2-Clause License. For details,
+please see COPYING.dmon
+
+Source: https://github.com/septag/dmon

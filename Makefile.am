@@ -20,3 +20,7 @@ sfcload_SOURCES = \
     src/serial.h
 
 sfcload_LDADD = $(LIBSERIALPORT_LIBS)
+
+dist_noinst_DATA = \
+    src/deps/dmon/dmon.h \
+    src/deps/dmon/LICENSE
